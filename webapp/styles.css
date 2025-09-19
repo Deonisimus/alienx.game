@@ -1,0 +1,5 @@
+body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:#0e1220;color:#eaf3ff}
+.wrap{max-width:720px;margin:0 auto;padding:24px 16px 64px}
+.card{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:16px;margin:16px 0;box-shadow:0 12px 30px rgba(0,0,0,.25)}
+.muted{color:#a8b4c9}button{border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.08);color:#eaf3ff;border-radius:10px;padding:10px 14px;margin:4px;cursor:pointer}
+.score{font-size:20px;margin:12px 0;display:flex;gap:8px;align-items:center}a{color:#cfe3ff}

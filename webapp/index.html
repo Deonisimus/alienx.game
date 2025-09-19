@@ -1,0 +1,54 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AlienX Arena</title>
+<link rel="stylesheet" href="/styles.css">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<div class="wrap">
+  <h1>AlienX Arena</h1>
+  <p class="muted">Пошаговые бои 3 раунда. Открой это из Telegram-бота для авторизации.</p>
+
+  <div class="card">
+    <div id="userBox" class="muted">User: ?</div>
+    <div id="profileBox" class="muted">Loading…</div>
+    <div class="score">Score: <strong id="score">0</strong></div>
+    <div>
+      <button id="saveBtn">Save score</button>
+      <button id="btnStr">+1 STR</button>
+      <button id="btnAgi">+1 AGI</button>
+      <button id="btnInt">+1 INT</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Arena</h2>
+    <div id="arenaOpp" class="muted">Press "Find Opponent"</div>
+    <button id="enqueueBtn">Find Opponent</button>
+    <div id="arenaChoices" style="display:none">
+      <div class="muted">Choose 3 actions:</div>
+      <div id="choices"></div>
+      <button id="fightBtn">Fight!</button>
+    </div>
+    <pre id="battleLog" style="white-space:pre-wrap"></pre>
+  </div>
+
+  <div class="card">
+    <h2>Leaderboard</h2>
+    <button id="lbScore">Score LB</button>
+    <button id="lbElo">ELO LB</button>
+    <ol id="lb"></ol>
+  </div>
+
+  <div class="card">
+    <h2>Lootboxes</h2>
+    <div id="invBox" class="muted"></div>
+    <button id="buyKey">Buy Key (stub)</button>
+    <button id="openBox">Open Box</button>
+  </div>
+
+  <div class="card">
+    <h2>Match History</h2>
+    <ul id="history"></ul>
+  </div>
+</div>
+<script src="/game.js"></script>
