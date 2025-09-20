@@ -3,14 +3,14 @@ const cors = require('cors');
 const path = require('path');
 const crypto = require('crypto');
 
-// -------- In-memory DB (persists while process alive) --------
+// -------- In-memory DB --------
 const mem = {
-  users: new Map(), // tg_id -> {id,tg_id,username,first_name,last_name,str,agi,int,xp,level,sp,elo,score}
+  users: new Map(),
   nextId: 1,
-  queue: new Set(), // user ids waiting
-  matches: new Map(), // match_id -> {id, user_id, opp, seed, resolved, result, elo_delta, log}
-  userMatches: new Map(), // user_id -> match_id
-  history: new Map() // user_id -> [match summaries]
+  queue: new Set(),
+  matches: new Map(),
+  userMatches: new Map(),
+  history: new Map()
 };
 
 // -------- App setup --------
@@ -23,7 +23,7 @@ if (ORIGIN) app.use(cors({ origin: ORIGIN }));
 const webappDir = path.join(__dirname, '..', 'webapp');
 app.use(express.static(webappDir));
 
-// -------- Telegram auth (WebAppData) --------
+// -------- Telegram auth --------
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
 function parseInitData(initData){ const p=new URLSearchParams(initData); const o={}; for (const [k,v] of p) o[k]=v; return o; }
 function checkTelegramAuth(initData){
@@ -49,12 +49,22 @@ function ensureUser(tg_user){
   for (const u of mem.users.values()){ if (u.tg_id===tg_id) return u; }
   const u = {
     id: mem.nextId++,
-    tg_id, username: tg_user.username||null, first_name: tg_user.first_name||null, last_name: tg_user.last_name||null,
-    str: 5, agi: 5, int: 5, xp: 0, level: 1, sp: 0, elo: 1000, score: 0, banned: 0
+    tg_id,
+    username: tg_user.username||null,
+    first_name: tg_user.first_name||null,
+    last_name: tg_user.last_name||null,
+    str: 5, agi: 5, int: 5,
+    xp: 0, level: 1, sp: 0,
+    elo: 1000, score: 0, banned: 0,
+    coins: 0, energy: 10,
+    lastDaily: 0,
+    keys: 0,
+    inventory: [] // [{item,qty}]
   };
   mem.users.set(u.id, u);
   return u;
 }
+
 function kFactor(level){ return level>=10 ? 24 : 32; }
 function eloExpected(a,b){ return 1 / (1 + Math.pow(10,(b-a)/400)); }
 function applyElo(cur, opp, lvl, score){ const k=kFactor(lvl); const e=eloExpected(cur,opp); return Math.round(k*(score-e)); }
@@ -98,12 +108,12 @@ app.get('/healthz', (req, res)=> res.json({ok:true}));
 app.post('/api/start', requireTg, (req,res)=>{
   const u = ensureUser(req.tg_user);
   if (u.banned) return res.status(403).json({error:'banned'});
-  res.json({ ok:true, user_id:u.id, stats:{ str:u.str, agi:u.agi, int:u.int, level:u.level, xp:u.xp, sp:u.sp, elo:u.elo, score:u.score } });
+  res.json({ ok:true, user_id:u.id, stats:u });
 });
 
 app.get('/api/profile', requireTg, (req,res)=>{
   const u = ensureUser(req.tg_user);
-  res.json({ ok:true, user:{ str:u.str, agi:u.agi, int:u.int, level:u.level, xp:u.xp, sp:u.sp, elo:u.elo, score:u.score } });
+  res.json({ ok:true, user:u });
 });
 
 app.post('/api/upgrade', requireTg, (req,res)=>{
@@ -112,7 +122,7 @@ app.post('/api/upgrade', requireTg, (req,res)=>{
   if (!['str','agi','int'].includes(stat)) return res.status(400).json({error:'bad stat'});
   if (u.sp<=0) return res.status(400).json({error:'no points'});
   u[stat]+=1; u.sp-=1;
-  res.json({ ok:true, stats:{str:u.str,agi:u.agi,int:u.int,sp:u.sp} });
+  res.json({ ok:true, stats:u });
 });
 
 app.post('/api/score', requireTg, (req,res)=>{
@@ -125,16 +135,68 @@ app.get('/api/leaderboard', (req,res)=>{
   const mode=(req.query.mode||'score').toLowerCase();
   const arr=[...mem.users.values()];
   if (mode==='elo') arr.sort((a,b)=>b.elo-a.elo);
+  else if (mode==='coins') arr.sort((a,b)=>b.coins-a.coins);
   else arr.sort((a,b)=>b.score-a.score);
-  const rows = arr.slice(0,50).map(u=>({username:u.username,first_name:u.first_name,last_name:u.last_name, elo:u.elo, score:u.score}));
+  const rows = arr.slice(0,50).map(u=>({username:u.username,first_name:u.first_name,last_name:u.last_name, elo:u.elo, score:u.score, coins:u.coins}));
   res.json({ ok:true, rows, mode });
 });
 
-// Queue & match
+// -------- Daily reward & store --------
+app.post('/api/daily/claim', requireTg, (req,res)=>{
+  const u=ensureUser(req.tg_user);
+  const DAY=24*60*60*1000;
+  const nowTs=Date.now();
+  const next=u.lastDaily?u.lastDaily+DAY:0;
+  if (next && nowTs<next) return res.status(429).json({ok:false,nextAt:next,retryIn:next-nowTs});
+  const reward=25+Math.floor(Math.random()*11);
+  u.coins+=reward; u.lastDaily=nowTs;
+  res.json({ok:true,reward,coins:u.coins,nextAt:nowTs+DAY});
+});
+app.post('/api/store/buy-energy', requireTg, (req,res)=>{
+  const u=ensureUser(req.tg_user);
+  const cost=15, gain=5;
+  if (u.coins < cost) return res.status(400).json({error:'not enough coins'});
+  u.coins -= cost; u.energy += gain;
+  res.json({ ok:true, coins:u.coins, energy:u.energy });
+});
+app.post('/api/store/buy-key', requireTg, (req,res)=>{
+  const u=ensureUser(req.tg_user);
+  const cost=20;
+  if (u.coins < cost) return res.status(400).json({error:'not enough coins'});
+  u.coins -= cost; u.keys += 1;
+  res.json({ ok:true, keys:u.keys, coins:u.coins });
+});
+app.post('/api/loot/open', requireTg, (req,res)=>{
+  const u=ensureUser(req.tg_user);
+  if (u.keys <= 0) return res.status(400).json({error:'no keys'});
+  u.keys -= 1;
+  const pool = [
+    { item:'⚙️ Scrap',      weight:70 },
+    { item:'💊 STR Chip',   weight:10, stat:'str', bonus:1 },
+    { item:'🌀 AGI Servo',  weight:10, stat:'agi', bonus:1 },
+    { item:'🧠 INT Core',   weight:9,  stat:'int', bonus:1 },
+    { item:'💎 Credit Pack',weight:1,  coins:50 }
+  ];
+  const sum = pool.reduce((a,p)=>a+p.weight,0);
+  let r = Math.random()*sum, picked = pool[0];
+  for (const p of pool){ r-=p.weight; if (r<=0){ picked=p; break; } }
+  if (picked.coins) u.coins += picked.coins;
+  if (picked.stat)  u[picked.stat] = (u[picked.stat]||0) + (picked.bonus||1);
+  const ix = u.inventory.findIndex(e=>e.item===picked.item);
+  if (ix>=0) u.inventory[ix].qty += 1;
+  else u.inventory.push({ item:picked.item, qty:1 });
+  res.json({ ok:true, gained:picked.item, coins:u.coins, keys:u.keys, inventory:u.inventory });
+});
+app.get('/api/inventory', requireTg, (req,res)=>{
+  const u=ensureUser(req.tg_user);
+  res.json({ ok:true, keys:u.keys, inventory:u.inventory, coins:u.coins, energy:u.energy });
+});
+
+// -------- PvP --------
 app.post('/api/pvp/enqueue', requireTg, (req,res)=>{
   const u=ensureUser(req.tg_user);
+  if (u.energy<=0) return res.status(400).json({error:'no energy'});
   mem.queue.add(u.id);
-  // Try to find opponent (any other queued)
   for (const other of mem.queue){
     if (other!==u.id){
       mem.queue.delete(other); mem.queue.delete(u.id);
@@ -154,7 +216,6 @@ app.post('/api/battle/start', requireTg, (req,res)=>{
   const u=ensureUser(req.tg_user);
   const mId = mem.userMatches.get(u.id);
   if (!mId){
-    // Create vs drone
     const seed=Math.floor(Math.random()*1e9);
     const id=Date.now()*1000 + Math.floor(Math.random()*1000);
     const opp={name:'Drone', str:u.str, agi:u.agi, int:u.int, elo:1000};
@@ -173,44 +234,27 @@ app.post('/api/battle/resolve', requireTg, (req,res)=>{
   if (!m || m.user_id!==u.id) return res.status(404).json({error:'match not found'});
   if (m.resolved) return res.json({ ok:true, already:true, result:m.result });
   const sim = simulate(m.seed, {str:u.str,agi:u.agi,int:u.int}, {str:m.opp.str,agi:m.opp.agi,int:m.opp.int}, actions.map(x=>String(x||'SLAM')));
-  let reward=0,xp=0,delta=0,scoreAdd=0;
-  if (sim.result==='win'){ reward=10; xp=20; scoreAdd=10; delta = applyElo(u.elo, m.opp.elo||1000, u.level, 1); }
-  else if (sim.result==='draw'){ reward=5; xp=12; scoreAdd=5; delta = applyElo(u.elo, m.opp.elo||1000, u.level, 0.5); }
-  else { reward=3; xp=8; scoreAdd=3; delta = applyElo(u.elo, m.opp.elo||1000, u.level, 0); }
-  u.elo += delta; u.score += scoreAdd; u.xp += xp;
+  
+  // списываем энергию
+  u.energy = Math.max(0, u.energy - 1);
+
+  let reward=0,xp=0,delta=0,scoreAdd=0,coins=0;
+  if (sim.result==='win'){ reward=10; xp=20; scoreAdd=10; coins=8; delta = applyElo(u.elo, m.opp.elo||1000, u.level, 1); }
+  else if (sim.result==='draw'){ reward=5; xp=12; scoreAdd=5; coins=4; delta = applyElo(u.elo, m.opp.elo||1000, u.level, 0.5); }
+  else { reward=3; xp=8; scoreAdd=3; coins=2; delta = applyElo(u.elo, m.opp.elo||1000, u.level, 0); }
+  u.elo += delta; u.score += scoreAdd; u.xp += xp; u.coins += coins;
   while (u.xp >= 100*u.level){ u.xp -= 100*u.level; u.level++; u.sp+=2; }
   m.resolved=true; m.result=sim.result; m.elo_delta=delta; m.log=sim.log;
   const entry = { ts: Date.now(), opp: m.opp, result: sim.result, elo_delta: delta };
   if (!mem.history.has(u.id)) mem.history.set(u.id, []);
   mem.history.get(u.id).unshift(entry); mem.history.get(u.id).splice(0,30);
   mem.userMatches.delete(u.id);
-  res.json({ ok:true, ...sim, reward, xpGain:xp, elo_delta:delta, new_score:u.score, level:u.level, sp:u.sp });
+  res.json({ ok:true, ...sim, reward, xpGain:xp, elo_delta:delta, new_score:u.score, level:u.level, sp:u.sp, coins:u.coins, energy:u.energy });
 });
 
 app.get('/api/matches', requireTg, (req,res)=>{
   const u=ensureUser(req.tg_user);
   res.json({ ok:true, rows: (mem.history.get(u.id)||[]) });
-});
-
-// Inventory & quests (very simple stubs)
-const inv = new Map(); // user_id -> [{item,qty}]
-const keys = new Map(); // user_id -> count
-app.get('/api/inventory', requireTg, (req,res)=>{
-  const u=ensureUser(req.tg_user);
-  res.json({ ok:true, keys: keys.get(u.id)||0, inventory: inv.get(u.id)||[] });
-});
-app.post('/api/store/buy-key', requireTg, (req,res)=>{
-  const u=ensureUser(req.tg_user);
-  keys.set(u.id, (keys.get(u.id)||0)+1);
-  res.json({ ok:true, keys: keys.get(u.id) });
-});
-app.post('/api/loot/open', requireTg, (req,res)=>{
-  const u=ensureUser(req.tg_user);
-  const k=keys.get(u.id)||0; if (k<=0) return res.status(400).json({error:'no keys'});
-  keys.set(u.id, k-1);
-  const loot=['skin:red-antenna','skin:blue-antenna','skin:gold-antenna'][Math.floor(Math.random()*3)];
-  const arr=inv.get(u.id)||[]; const found=arr.find(x=>x.item===loot); if (found) found.qty++; else arr.push({item:loot,qty:1}); inv.set(u.id, arr);
-  res.json({ ok:true, gained:loot, inventory:arr });
 });
 
 const PORT = process.env.PORT || 8080;
